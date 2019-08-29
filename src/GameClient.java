@@ -1,5 +1,6 @@
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -20,48 +21,56 @@ import java.io.DataOutputStream;
 import java.net.Socket;
 
 public class GameClient extends Application {
-    private DataOutputStream dataOutputStream;
-    private DataInputStream dataInputStream;
+    private String hostGame = "localhost";
+    private int portGame = 8000;
+    private DataOutputStream dataOutputStreamGame;
+    private DataInputStream dataInputStreamGame;
     private GridPane gridPanePlayers = new GridPane();
-    private HBox hBox = new HBox();
-    private VBox vBox = new VBox();
-    private TextArea textArea = new TextArea();
+    private TextArea textAreaChat = new TextArea();
     private TextField textFieldChat = new TextField();
+    Circle circleConnected;
 
     @Override // Override the start method in the Application class
     public void start(Stage primaryStage) {
         GameView gameView = new GameView();
         Pane pane = gameView.getPane();
 
+        gridPanePlayers.setPadding(new Insets(10));
         gridPanePlayers.setHgap(10);
         gridPanePlayers.setStyle("-fx-border-color: black");
         gridPanePlayers.setPrefHeight(275);
 
-        TextField textFieldIp = new TextField();
-        textFieldIp.setPromptText("Enter host IP");
-
+        TextField textFieldHost = new TextField();
+        textFieldHost.setPromptText("Enter host IP");
+        TextField textFieldPort = new TextField();
+        textFieldPort.setPromptText("Enter host port");
         Button buttonConnect = new Button("Connect");
+        buttonConnect.setPrefWidth(70);
         Button buttonReady = new Button("Ready");
+        buttonReady.setPrefWidth(70);
+        circleConnected = new Circle(8, Color.RED);
 
         GridPane gridPaneConnection = new GridPane();
 //        gridPaneConnection.setStyle("-fx-border-color: black");
 //        gridPaneConnection.setPrefHeight(100);
         gridPaneConnection.setHgap(5);
         gridPaneConnection.setVgap(10);
-        gridPaneConnection.addRow(0, textFieldIp, buttonConnect);
-        gridPaneConnection.add(buttonReady, 1, 1);
+        gridPaneConnection.addRow(0, textFieldHost, textFieldPort, buttonConnect, circleConnected);
+        gridPaneConnection.add(buttonReady, 2, 1);
 
-        textArea.setEditable(false);
-        textArea.setPrefHeight(300);
-        textArea.setFocusTraversable(false);
+        textAreaChat.setEditable(false);
+        textAreaChat.setPrefHeight(300);
+        textAreaChat.setFocusTraversable(false);
 
         textFieldChat.setPromptText("Enter chat message and hit enter");
 
-        vBox.setSpacing(10);
-        vBox.getChildren().addAll(gridPanePlayers, gridPaneConnection, textArea, textFieldChat);
+        VBox vBoxRightSide = new VBox();
+        vBoxRightSide.setSpacing(10);
+        vBoxRightSide.getChildren().addAll(gridPanePlayers, gridPaneConnection, textAreaChat, textFieldChat);
 
+        HBox hBox = new HBox();
         hBox.setSpacing(10);
-        hBox.getChildren().addAll(pane, vBox);
+        hBox.getChildren().addAll(pane, vBoxRightSide);
 
         // Create a scene and place it in the stage
         Scene scene = new Scene(hBox);
@@ -69,34 +78,38 @@ public class GameClient extends Application {
         primaryStage.setScene(scene); // Place the scene in the stage
         primaryStage.show(); // Display the stage
 
-        buttonReady.requestFocus();
+        buttonConnect.requestFocus();
+
+        buttonConnect.setOnAction(event -> {
+            hostGame = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : "localhost";
+            portGame = textFieldPort.getText().length() > 0 ? Integer.parseInt(textFieldPort.getText()) : 8000;
+
+            new Thread(gameView).start();
+            buttonReady.requestFocus();
+        });
 
         buttonReady.setOnAction(event -> {
             try {
-                dataOutputStream.writeBoolean(true);
+                dataOutputStreamGame.writeBoolean(true);
             } catch (Exception e) {
                 e.printStackTrace();
             }
 
             pane.requestFocus();
         });
-
-        new Thread(gameView).start();
     }
 
     class GameView implements Runnable {
         private Pane pane = new Pane();
+        private Label labelId = new Label("ID"), labelReady = new Label("Ready?"), labelAlive = new Label("Alive?");
+        private Circle[] circles;
+        private Polyline[] polylines;
         private byte numberOfPlayers, playerId;
         private double radius = 5, width = 1000, height = 700;
         private double[] xCoordinates, yCoordinates;
-        private Circle[] circles;
-        private Polyline[] polylines;
-        private boolean keydownLeft, keydownRight;
+        private boolean keydownLeft, keydownRight, allReady;
         private boolean[] deadPlayers, readyPlayers;
         private Color[] colors = {Color.RED, Color.BLUE, Color.GREEN, Color.ORANGE, Color.PURPLE, Color.PINK};
-
-        Label labelId = new Label("ID");
-        Label labelReady = new Label("Ready?");
 
         public GameView() {
             pane.setPrefSize(width, height);
@@ -108,6 +121,8 @@ public class GameClient extends Application {
             labelId.setPrefWidth(100);
             labelReady.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
             labelReady.setPrefWidth(100);
+            labelAlive.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
+            labelAlive.setPrefWidth(100);
 
             drawSidebar();
         }
@@ -115,7 +130,7 @@ public class GameClient extends Application {
         public void drawSidebar() {
             Platform.runLater(() -> {
                 gridPanePlayers.getChildren().clear();
-                gridPanePlayers.addRow(0, labelId, labelReady);
+                gridPanePlayers.addRow(0, labelId, labelReady, labelAlive);
                 for (int i = 0; i < numberOfPlayers; i++) {
                     Label label1 = new Label("Player " + i);
                     label1.setTextFill(colors[i]);
@@ -123,7 +138,18 @@ public class GameClient extends Application {
                     Label label2 = new Label(readyPlayers[i] ? "Yes" : "No");
                     label2.setTextFill(readyPlayers[i] ? Color.GREEN : Color.RED);
                     label2.setStyle("-fx-font-size: 20;");
-                    gridPanePlayers.addRow(i + 1, label1, label2);
+
+                    Label label3;
+                    if (allReady) {
+                        label3 = new Label(deadPlayers[i] ? "No" : "Yes");
+                        label3.setTextFill(deadPlayers[i] ? Color.RED : Color.GREEN);
+                    } else { // The deadPlayers array is null until the game starts, so assume everyone is alive
+                        label3 = new Label("Yes");
+                        label3.setTextFill(Color.GREEN);
+                    }
+                    label3.setStyle("-fx-font-size: 20;");
+
+                    gridPanePlayers.addRow(i + 1, label1, label2, label3);
                 }
             });
         }
@@ -131,29 +157,31 @@ public class GameClient extends Application {
         @Override
         public void run() {
             try {
-                Socket socket = new Socket("localhost", 8000); // Create a socket to connect to the server
+                Socket socketGame = new Socket(hostGame, portGame); // Create a socket to connect to the server
+                circleConnected.setFill(Color.GREEN);
 
-                dataOutputStream = new DataOutputStream(socket.getOutputStream());
-                dataInputStream = new DataInputStream(socket.getInputStream());
+                dataOutputStreamGame = new DataOutputStream(socketGame.getOutputStream());
+                dataInputStreamGame = new DataInputStream(socketGame.getInputStream());
 
-                byte id = dataInputStream.readByte();
+                byte id = dataInputStreamGame.readByte();
                 playerId = id;
                 System.out.println("Player number " + id);
 
                 System.out.println("Waiting for all ready");
                 while (true) {
-                    byte command = dataInputStream.readByte();
+                    byte command = dataInputStreamGame.readByte();
                     if (command == 0) { // 0 = receive number of players
-                        numberOfPlayers = dataInputStream.readByte();
+                        numberOfPlayers = dataInputStreamGame.readByte();
                         readyPlayers = new boolean[numberOfPlayers]; // TODO: Copy the content of the old array (if you want players to be able to ready up before all players have joined)
                         drawSidebar();
                         System.out.println("Number of players " + numberOfPlayers);
                     } else if (command == 1) { // 1 = player ready
-                        byte readyPlayerId = dataInputStream.readByte();
+                        byte readyPlayerId = dataInputStreamGame.readByte();
                         readyPlayers[readyPlayerId] = true;
                         drawSidebar();
                         System.out.println("Player " + readyPlayerId + " ready");
                     } else if (command == 2) { // 2 = all players ready
+                        allReady = true;
                         break;
                     }
                 }
@@ -183,25 +211,39 @@ public class GameClient extends Application {
                 while (true) {
                     for (int i = 0; i < numberOfPlayers; i++) {
                         if (!deadPlayers[i]) {
-                            deadPlayers[i] = dataInputStream.readBoolean();
-                            xCoordinates[i] = dataInputStream.readDouble();
-                            yCoordinates[i] = dataInputStream.readDouble();
+                            deadPlayers[i] = dataInputStreamGame.readBoolean();
+                            xCoordinates[i] = dataInputStreamGame.readDouble();
+                            yCoordinates[i] = dataInputStreamGame.readDouble();
 
-                            if (deadPlayers[i])
+                            if (deadPlayers[i]) {
+                                drawSidebar();
                                 System.out.println("Player " + i + " dead");
+                            }
                         }
                     }
 
                     draw();
 
                     byte numberOfPlayersAlive = numberOfPlayersAlive();
-                    if (numberOfPlayers > 1 && (numberOfPlayersAlive == 1 || numberOfPlayersAlive == 0))
+                    if (numberOfPlayers > 1 && (numberOfPlayersAlive == 1 || numberOfPlayersAlive == 0)) {
+                        Label labelGameEnd = new Label(numberOfPlayersAlive == 0 ? "Draw" : "Player " + getWinner() + " wins!");
+                        labelGameEnd.setLayoutX(400);
+                        labelGameEnd.setLayoutY(500);
+                        labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
+                        Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
                         break;
-                    else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0)
+                    } else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) {
+                        Label labelGameEnd = new Label("Game over");
+                        labelGameEnd.setLayoutX(400);
+                        labelGameEnd.setLayoutY(500);
+                        labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
+                        Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
                         break;
+                    }
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
+                circleConnected.setFill(Color.RED);
             }
 
             System.out.println("Game over");
@@ -214,13 +256,13 @@ public class GameClient extends Application {
                 try {
                     if (!deadPlayers[playerId])
                         if (event.getCode() == KeyCode.LEFT) {
-                            dataOutputStream.writeByte(-1);
-                            dataOutputStream.flush();
+                            dataOutputStreamGame.writeByte(-1);
+                            dataOutputStreamGame.flush();
                             keydownLeft = true;
                             keydownRight = false;
                         } else if (event.getCode() == KeyCode.RIGHT) {
-                            dataOutputStream.writeByte(1);
-                            dataOutputStream.flush();
+                            dataOutputStreamGame.writeByte(1);
+                            dataOutputStreamGame.flush();
                             keydownRight = true;
                             keydownLeft = false;
                         }
@@ -238,8 +280,8 @@ public class GameClient extends Application {
 
                 if (!keydownLeft && !keydownRight && !deadPlayers[playerId]) // This if statement prevent the controls from becoming unresponsive when direction is changed in quick succession
                     try {
-                        dataOutputStream.writeByte(0);
-                        dataOutputStream.flush();
+                        dataOutputStreamGame.writeByte(0);
+                        dataOutputStreamGame.flush();
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -255,13 +297,10 @@ public class GameClient extends Application {
 
                 circles[i].setCenterX(xCoordinates[i]);
                 circles[i].setCenterY(yCoordinates[i]);
-
-//                System.out.println("draw " + i + " x" + xCoordinates[i] + " y " + yCoordinates[i]);
             }
 
             Platform.runLater(() -> {
                 pane.getChildren().clear();
-
                 for (int i = 0; i < numberOfPlayers; i++) {
                     pane.getChildren().addAll(polylines[i], circles[i]);
                 }
@@ -279,6 +318,14 @@ public class GameClient extends Application {
                     counter++;
             }
             return counter;
+        }
+
+        public byte getWinner() {
+            for (byte i = 0; i < deadPlayers.length; i++) {
+                if (!deadPlayers[i])
+                    return i;
+            }
+            return -1;
         }
     }
 }

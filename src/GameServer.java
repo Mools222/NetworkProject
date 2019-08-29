@@ -21,7 +21,7 @@ public class GameServer {
     }
 
     public GameServer() {
-        // This thread stops the program from finishing
+        // This thread stops the program from ever finishing
         new Thread(() -> {
             try {
                 ServerSocket serverSocket = new ServerSocket(8000); // Create a server socket
@@ -66,9 +66,8 @@ public class GameServer {
 
     class GameEngine {
         private double speed = 3; // The number of pixels the line moves per calculation
-        private double radius = 5, width = 1000, height = 700;
-        //        private double[] xCoordinates = new double[numberOfPlayers];
-//        private double[] yCoordinates = new double[numberOfPlayers];
+        private double radius = 5; // The radius of the circle that makes up the front of the line the player controls
+        private double width = 1000, height = 700; // Width and height of the pane. Used for checking whether a player hit a side
         private int[] angles = new int[numberOfPlayers];
         private Polyline[] polylines = new Polyline[numberOfPlayers];
 
@@ -158,7 +157,6 @@ public class GameServer {
             }
             return counter;
         }
-
     }
 
     class GameClientHandler implements Runnable {
@@ -205,8 +203,6 @@ public class GameServer {
             boolean allReadyLocal = true;
 
             for (int i = 0; i < readyPlayers.length; i++) {
-//                System.out.println(readyPlayers[i]);
-//                System.out.println("l " + readyPlayers.length);
                 if (!readyPlayers[i]) {
                     allReadyLocal = false;
                     break;
@@ -214,12 +210,11 @@ public class GameServer {
             }
 
             if (allReadyLocal) {
-                System.out.println("All players ready");
-
                 for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
                     gameClientHandler.sendAllReady();
 
                 allReady = true;
+                System.out.println("All players ready");
             }
         }
 
