@@ -11,7 +11,7 @@ import java.util.Date;
 public class GameServer {
     private ArrayList<GameClientHandler> listOfGameClientHandlers = new ArrayList<>(); // Kinda like the observer pattern
     private byte numberOfPlayers;
-    private boolean allReady, gameOver;
+    private boolean allReady;
     private byte[] directions;
     private boolean[] deadPlayers, readyPlayers;
     private double[] xCoordinates, yCoordinates;
@@ -25,7 +25,7 @@ public class GameServer {
         new Thread(() -> {
             try {
                 ServerSocket serverSocket = new ServerSocket(8000); // Create a server socket
-                System.out.println("GameServer started at " + new Date());
+                System.out.println("Game server started at " + new Date());
 
                 while (true) {
                     Socket socket = serverSocket.accept(); // Listen for a new connection request
@@ -53,7 +53,6 @@ public class GameServer {
                 break;
             }
 
-//            System.out.println("Sleep");
             try {
                 Thread.sleep(3000);
             } catch (Exception e) {
@@ -64,84 +63,22 @@ public class GameServer {
         System.out.println("End main");
     }
 
-    class GameEngine {
-        private double speed = 3; // The number of pixels the line moves per calculation
-        private double radius = 5; // The radius of the circle that makes up the front of the line the player controls
-        private double width = 1000, height = 700; // Width and height of the pane. Used for checking whether a player hit a side
+    class GameEngine implements GameConstants {
+        private final double SPEED = 3; // The number of pixels the line moves per calculation
         private int[] angles = new int[numberOfPlayers];
         private Polyline[] polylines = new Polyline[numberOfPlayers];
+        private byte roundsPlayed;
 
         public GameEngine() {
-            for (int i = 0; i < numberOfPlayers; i++) {
-                xCoordinates[i] = 400 + (i * 50);
-                yCoordinates[i] = 400 + (i * 50);
-                Polyline polyline = new Polyline();
-                polyline.setStrokeWidth(5);
-                polylines[i] = polyline;
-            }
+            while (roundsPlayed < ROUNDSTOTAL) {
+                setStartingPoints();
+                System.out.println("Start round " + roundsPlayed);
+                startGameEngine();
+                resetDataFields();
 
-            System.out.println("Start the game");
-            start();
-        }
-
-        private void start() {
-            while (!gameOver) {
-                // Add previous coordinates to polylines
-                for (int i = 0; i < numberOfPlayers; i++) {
-                    if (!deadPlayers[i]) {
-                        polylines[i].getPoints().add(xCoordinates[i]);
-                        polylines[i].getPoints().add(yCoordinates[i]);
-                    }
-                }
-
-                // Calculate new coordinates for all clients
-                for (int i = 0; i < numberOfPlayers; i++) {
-                    if (!deadPlayers[i]) {
-                        byte angleChangeInDegrees = 6;
-                        angles[i] += angleChangeInDegrees * directions[i];
-
-                        xCoordinates[i] += Math.cos(angles[i] * Math.PI / 180) * speed;
-                        yCoordinates[i] += Math.sin(angles[i] * Math.PI / 180) * speed;
-                    }
-                }
-
-                for (int i = 0; i < numberOfPlayers; i++) {
-                    // Can't do the "if (!deadPlayers[i])" check here, since you can't check if a set of coordinates contains a polyline. You can only check if a polyline contains a set of coordinates
-                    for (int j = 0; j < numberOfPlayers; j++) {
-                        if (!deadPlayers[j] && polylines[i].contains(xCoordinates[j], yCoordinates[j])) {
-                            System.out.println("Player " + j + " dead");
-                            deadPlayers[j] = true;
-                        }
-                    }
-
-                    if (!deadPlayers[i]) {
-                        if (xCoordinates[i] < radius || xCoordinates[i] > width - radius) {
-                            System.out.println("Player " + i + " hit the right or left side");
-                            deadPlayers[i] = true;
-                        }
-
-                        if (yCoordinates[i] < radius || yCoordinates[i] > height - radius) {
-                            System.out.println("Player " + i + " hit the top or the bottom side");
-                            deadPlayers[i] = true;
-                        }
-                    }
-                }
-
-                // Send new coordinates to all clients
-                for (GameClientHandler client : listOfGameClientHandlers) {
-                    client.sendCoordinates();
-                }
-
-                byte numberOfPlayersAlive = numberOfPlayersAlive();
-                if (numberOfPlayers > 1 && (numberOfPlayersAlive == 1 || numberOfPlayersAlive == 0)) // If 1 player is alive, someone has one. If 0 players are alive, it's a draw
-                    gameOver = true;
-                else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) // If 1 player is playing, don't end the game until he dies
-                    gameOver = true;
-
-                // Pause the thread for a short while
                 try {
-                    Thread.sleep(25); // This determines how often coordinates are sent
-                } catch (Exception e) {
+                    Thread.sleep(5000); // Time between rounds
+                } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }
@@ -149,9 +86,96 @@ public class GameServer {
             System.out.println("Game over");
         }
 
-        public byte numberOfPlayersAlive() {
+        private void resetDataFields() {
+            directions = new byte[numberOfPlayers];
+            deadPlayers = new boolean[numberOfPlayers];
+            xCoordinates = new double[numberOfPlayers];
+            yCoordinates = new double[numberOfPlayers];
+
+            for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
+                gameClientHandler.initializeArray();
+        }
+
+        private void setStartingPoints() {
+            for (int i = 0; i < numberOfPlayers; i++) {
+                xCoordinates[i] = (int) (100 + (Math.random() * (WIDTH - 200))); // Pick a random starting x coordinate, but make sure the player can turn if he is facing a side
+                yCoordinates[i] = (int) (100 + (Math.random() * (HEIGHT - 200))); // Pick a random starting y coordinate, but make sure the player can turn if he is facing a side
+                angles[i] = (int) (Math.random() * 361); // Pick a random starting angle
+                Polyline polyline = new Polyline();
+                polyline.setStrokeWidth(5); // Stroke width must be set to ensure the contains method works properly
+                polylines[i] = polyline; // Initialize the polylines
+            }
+        }
+
+        private void startGameEngine() {
+            while (true) {
+                // Add previous coordinates to polylines, which trace after the player
+                for (int i = 0; i < numberOfPlayers; i++) {
+                    if (!deadPlayers[i]) {
+                        polylines[i].getPoints().add(xCoordinates[i]);
+                        polylines[i].getPoints().add(yCoordinates[i]);
+                    }
+                }
+
+                // Calculate new coordinates for all players
+                for (int i = 0; i < numberOfPlayers; i++) {
+                    if (!deadPlayers[i]) {
+                        byte angleChangeInDegrees = 6;
+                        angles[i] += angleChangeInDegrees * directions[i]; // Add the change in degrees to the angle
+
+                        xCoordinates[i] += Math.cos(angles[i] * Math.PI / 180) * SPEED; // Calculate new x coordinate based on the change in angle and speed
+                        yCoordinates[i] += Math.sin(angles[i] * Math.PI / 180) * SPEED; // Calculate new y coordinate based on the change in angle and speed
+                    }
+                }
+
+                // Check if any player is dead
+                checkForDeadPlayer();
+
+                // Send new coordinates & dead/alive status to all players
+                for (GameClientHandler client : listOfGameClientHandlers)
+                    client.sendGameInfo();
+
+                // Check if the game is over
+                byte numberOfPlayersAlive = getNumberOfPlayersAlive();
+                if (numberOfPlayers > 1 && (numberOfPlayersAlive == 1 || numberOfPlayersAlive == 0)) // If 1 player is alive, someone has one. If 0 players are alive, it's a draw
+                    break;
+                else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) // If 1 player is playing, don't end the game until he dies
+                    break;
+
+                // Pause the thread for a short while. This determines how often game info is calculated and sent
+                try {
+                    Thread.sleep(25);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            System.out.println("Round " + roundsPlayed++ + " over");
+        }
+
+        private void checkForDeadPlayer() {
+            for (int i = 0; i < numberOfPlayers; i++) {
+                if (!deadPlayers[i]) { // Only check if the player isn't already dead
+                    if (xCoordinates[i] < RADIUS || xCoordinates[i] > WIDTH - RADIUS) {
+                        System.out.println("Player " + i + " hit the right or left side");
+                        deadPlayers[i] = true;
+                    } else if (yCoordinates[i] < RADIUS || yCoordinates[i] > HEIGHT - RADIUS) {
+                        System.out.println("Player " + i + " hit the top or the bottom side");
+                        deadPlayers[i] = true;
+                    } else
+                        for (int j = 0; j < numberOfPlayers; j++)
+                            if (polylines[j].contains(xCoordinates[i], yCoordinates[i])) {
+                                System.out.println("Player " + i + " collided with the line of player " + j);
+                                deadPlayers[i] = true;
+                            }
+                }
+            }
+        }
+
+        // I guess this method can be replaced by a simple variable
+        private byte getNumberOfPlayersAlive() {
             byte counter = 0;
-            for (int i = 0; i < deadPlayers.length; i++) {
+            for (int i = 0; i < numberOfPlayers; i++) {
                 if (!deadPlayers[i])
                     counter++;
             }
@@ -164,7 +188,7 @@ public class GameServer {
         private DataOutputStream dataOutputStream;
         private DataInputStream dataInputStream;
         private byte playerId;
-        private boolean[] notifiedDeadPlayer; // This must be placed inside this class, as all clients need to know which players have been notified of their death
+        private boolean[] notifiedDeadPlayer;
 
         public GameClientHandler(Socket socket, byte playerId) {
             this.socket = socket;
@@ -173,36 +197,52 @@ public class GameServer {
 
         public void run() {
             try {
-                dataOutputStream = new DataOutputStream(socket.getOutputStream());
-                dataInputStream = new DataInputStream(socket.getInputStream());
-
-                dataOutputStream.writeByte(playerId);
-                System.out.println("Player " + playerId + " waiting for ready");
-
-                for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
-                    gameClientHandler.sendNumberOfPlayers();
-
-                boolean ready = dataInputStream.readBoolean();
-                readyPlayers[playerId] = ready; // Just writing "readyPlayers[playerId] = dataInputStream.readBoolean();" doesn't work and I have no idea why.
-                System.out.println("Player " + playerId + " ready");
-
-                for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
-                    gameClientHandler.sendPlayerReady(playerId);
-
-                checkAllReady();
-
-                while (!gameOver) {
-                    directions[playerId] = dataInputStream.readByte();
-                }
+                initializeStreams();
+                sendPlayerInfo();
+                receiveDirection();
             } catch (IOException ex) {
                 ex.printStackTrace();
             }
         }
 
-        public void checkAllReady() {
+        private void initializeStreams() throws IOException {
+            dataOutputStream = new DataOutputStream(socket.getOutputStream());
+            dataInputStream = new DataInputStream(socket.getInputStream());
+        }
+
+        private void sendPlayerInfo() throws IOException {
+            // Send player ID
+            dataOutputStream.writeByte(playerId);
+            System.out.println("Player " + playerId + " waiting for ready");
+
+            // Send number of players
+            for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
+                gameClientHandler.sendNumberOfPlayers();
+
+            // Wait for player to signal he is ready
+            boolean ready = dataInputStream.readBoolean();
+            readyPlayers[playerId] = ready; // Just writing "readyPlayers[playerId] = dataInputStream.readBoolean();" doesn't work and I have no idea why.
+            System.out.println("Player " + playerId + " ready");
+
+            // Tell all players that this player is ready
+            for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
+                gameClientHandler.sendPlayerReady(playerId);
+
+            // Check if all players are ready
+            checkAllReady();
+        }
+
+        private void receiveDirection() throws IOException {
+            while (true) {
+                byte direction = dataInputStream.readByte();
+                directions[playerId] = direction; // Just writing "directions[playerId] = dataInputStream.readByte();" doesn't work properly for some reason
+            }
+        }
+
+        private void checkAllReady() {
             boolean allReadyLocal = true;
 
-            for (int i = 0; i < readyPlayers.length; i++) {
+            for (int i = 0; i < numberOfPlayers; i++) {
                 if (!readyPlayers[i]) {
                     allReadyLocal = false;
                     break;
@@ -210,15 +250,21 @@ public class GameServer {
             }
 
             if (allReadyLocal) {
-                for (GameClientHandler gameClientHandler : listOfGameClientHandlers)
+                for (GameClientHandler gameClientHandler : listOfGameClientHandlers) {
                     gameClientHandler.sendAllReady();
+                    gameClientHandler.initializeArray();
+                }
 
                 allReady = true;
                 System.out.println("All players ready");
             }
         }
 
-        public void sendPlayerReady(byte playerId) {
+        private void initializeArray() {
+            notifiedDeadPlayer = new boolean[numberOfPlayers]; // Can't initialize this variable until the total number of players is known
+        }
+
+        private void sendPlayerReady(byte playerId) {
             try {
                 dataOutputStream.writeByte(1);
                 dataOutputStream.writeByte(playerId);
@@ -227,17 +273,15 @@ public class GameServer {
             }
         }
 
-        public void sendAllReady() {
+        private void sendAllReady() {
             try {
                 dataOutputStream.writeByte(2);
             } catch (Exception e) {
                 e.printStackTrace();
             }
-
-            notifiedDeadPlayer = new boolean[numberOfPlayers]; // Can't initialize this variable until the total number of players is known
         }
 
-        public void sendNumberOfPlayers() {
+        private void sendNumberOfPlayers() {
             try {
                 dataOutputStream.writeByte(0);
                 dataOutputStream.writeByte(numberOfPlayers);
@@ -246,17 +290,23 @@ public class GameServer {
             }
         }
 
-        public void sendCoordinates() {
+        /**
+         * This method sends the following to every player:
+         * 1) Info about the alive/dead status of every player
+         * 2) The coordinates of every player
+         * <p>
+         * If a player dies, the alive/dead status and coordinates of this player is sent one more time and then not anymore.
+         */
+        private void sendGameInfo() {
             try {
                 for (byte i = 0; i < numberOfPlayers; i++) {
-                    if (!notifiedDeadPlayer[i]) { // Only send dead status and coordinates if the player has not been notified that he is dead
+                    if (!notifiedDeadPlayer[i]) { // Only send death status and coordinates if players have not been notified that a player is dead
                         dataOutputStream.writeBoolean(deadPlayers[i]); // Notify the player whether he is dead
                         dataOutputStream.writeDouble(xCoordinates[i]); // Send new x coordinate
                         dataOutputStream.writeDouble(yCoordinates[i]); // Send new y coordinate
-//                        System.out.println(xCoordinates[i] + ", " + yCoordinates[i]);
 
                         if (deadPlayers[i])
-                            notifiedDeadPlayer[i] = true; // If the player is dead, he has been notified of this and we can stop sending him coordinates
+                            notifiedDeadPlayer[i] = true; // If the player is dead, he has been notified of this and we can stop sending
                     }
                 }
             } catch (Exception e) {

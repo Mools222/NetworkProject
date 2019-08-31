@@ -18,6 +18,7 @@ import javafx.stage.Stage;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.IOException;
 import java.net.Socket;
 
 public class GameClient extends Application {
@@ -28,7 +29,7 @@ public class GameClient extends Application {
     private GridPane gridPanePlayers = new GridPane();
     private TextArea textAreaChat = new TextArea();
     private TextField textFieldChat = new TextField();
-    Circle circleConnected;
+    private Circle circleConnected;
 
     @Override // Override the start method in the Application class
     public void start(Stage primaryStage) {
@@ -61,7 +62,6 @@ public class GameClient extends Application {
         textAreaChat.setEditable(false);
         textAreaChat.setPrefHeight(300);
         textAreaChat.setFocusTraversable(false);
-
         textFieldChat.setPromptText("Enter chat message and hit enter");
 
         VBox vBoxRightSide = new VBox();
@@ -84,14 +84,20 @@ public class GameClient extends Application {
             hostGame = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : "localhost";
             portGame = textFieldPort.getText().length() > 0 ? Integer.parseInt(textFieldPort.getText()) : 8000;
 
-            new Thread(gameView).start();
-            buttonReady.requestFocus();
+            try {
+                Socket socketGame = new Socket(hostGame, portGame); // Create a socket to connect to the server
+                gameView.setSocketGame(socketGame);
+                new Thread(gameView).start();
+                buttonReady.requestFocus();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         });
 
         buttonReady.setOnAction(event -> {
             try {
                 dataOutputStreamGame.writeBoolean(true);
-            } catch (Exception e) {
+            } catch (IOException e) {
                 e.printStackTrace();
             }
 
@@ -99,20 +105,21 @@ public class GameClient extends Application {
         });
     }
 
-    class GameView implements Runnable {
+    class GameView implements Runnable, GameConstants {
+        private Socket socketGame;
         private Pane pane = new Pane();
-        private Label labelId = new Label("ID"), labelReady = new Label("Ready?"), labelAlive = new Label("Alive?");
+        private Label labelId = new Label("ID"), labelReady = new Label("Ready?"), labelAlive = new Label("Alive?"), labelScore = new Label("Score");
         private Circle[] circles;
         private Polyline[] polylines;
-        private byte numberOfPlayers, playerId;
-        private double radius = 5, width = 1000, height = 700;
+        private byte numberOfPlayers, playerId, roundsPlayed;
+        private byte[] scores;
         private double[] xCoordinates, yCoordinates;
-        private boolean keydownLeft, keydownRight, allReady;
+        private boolean keydownLeft, keydownRight;
         private boolean[] deadPlayers, readyPlayers;
-        private Color[] colors = {Color.RED, Color.BLUE, Color.GREEN, Color.ORANGE, Color.PURPLE, Color.PINK};
+        private Color[] colors = {Color.RED, Color.BLUE, Color.GREEN, Color.ORANGE, Color.PURPLE, Color.PINK, Color.TEAL};
 
         public GameView() {
-            pane.setPrefSize(width, height);
+            pane.setPrefSize(WIDTH, HEIGHT);
 //            pane.setStyle("-fx-background-color: grey; -fx-border-color: black; -fx-border-width: 3");
             pane.setStyle("-fx-border-color: black; -fx-border-width: 3");
 
@@ -123,14 +130,16 @@ public class GameClient extends Application {
             labelReady.setPrefWidth(100);
             labelAlive.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
             labelAlive.setPrefWidth(100);
+            labelScore.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
+            labelScore.setPrefWidth(100);
 
             drawSidebar();
         }
 
-        public void drawSidebar() {
+        private void drawSidebar() {
             Platform.runLater(() -> {
                 gridPanePlayers.getChildren().clear();
-                gridPanePlayers.addRow(0, labelId, labelReady, labelAlive);
+                gridPanePlayers.addRow(0, labelId, labelReady, labelAlive, labelScore);
                 for (int i = 0; i < numberOfPlayers; i++) {
                     Label label1 = new Label("Player " + i);
                     label1.setTextFill(colors[i]);
@@ -139,106 +148,51 @@ public class GameClient extends Application {
                     label2.setTextFill(readyPlayers[i] ? Color.GREEN : Color.RED);
                     label2.setStyle("-fx-font-size: 20;");
 
-                    Label label3;
-                    if (allReady) {
-                        label3 = new Label(deadPlayers[i] ? "No" : "Yes");
-                        label3.setTextFill(deadPlayers[i] ? Color.RED : Color.GREEN);
-                    } else { // The deadPlayers array is null until the game starts, so assume everyone is alive
-                        label3 = new Label("Yes");
-                        label3.setTextFill(Color.GREEN);
-                    }
+                    Label label3 = new Label(deadPlayers != null ? deadPlayers[i] ? "No" : "Yes" : "Yes"); // The deadPlayers array is null until the game starts, so assume everyone is alive
+                    label3.setTextFill(deadPlayers != null ? (deadPlayers[i] ? Color.RED : Color.GREEN) : Color.GREEN);
                     label3.setStyle("-fx-font-size: 20;");
 
-                    gridPanePlayers.addRow(i + 1, label1, label2, label3);
+                    Label label4 = new Label(scores != null ? String.valueOf(scores[i]) : String.valueOf(0));
+                    label4.setStyle("-fx-font-size: 20;");
+
+                    gridPanePlayers.addRow(i + 1, label1, label2, label3, label4);
                 }
             });
         }
 
+        private void setSocketGame(Socket socketGame) {
+            this.socketGame = socketGame;
+        }
+
         @Override
         public void run() {
+            circleConnected.setFill(Color.GREEN);
+
             try {
-                Socket socketGame = new Socket(hostGame, portGame); // Create a socket to connect to the server
-                circleConnected.setFill(Color.GREEN);
+                initializeStreams();
+                System.out.println("Streams open");
 
-                dataOutputStreamGame = new DataOutputStream(socketGame.getOutputStream());
-                dataInputStreamGame = new DataInputStream(socketGame.getInputStream());
-
-                byte id = dataInputStreamGame.readByte();
-                playerId = id;
-                System.out.println("Player number " + id);
+                receiveId();
+                System.out.println("Player number: " + playerId);
 
                 System.out.println("Waiting for all ready");
-                while (true) {
-                    byte command = dataInputStreamGame.readByte();
-                    if (command == 0) { // 0 = receive number of players
-                        numberOfPlayers = dataInputStreamGame.readByte();
-                        readyPlayers = new boolean[numberOfPlayers]; // TODO: Copy the content of the old array (if you want players to be able to ready up before all players have joined)
-                        drawSidebar();
-                        System.out.println("Number of players " + numberOfPlayers);
-                    } else if (command == 1) { // 1 = player ready
-                        byte readyPlayerId = dataInputStreamGame.readByte();
-                        readyPlayers[readyPlayerId] = true;
-                        drawSidebar();
-                        System.out.println("Player " + readyPlayerId + " ready");
-                    } else if (command == 2) { // 2 = all players ready
-                        allReady = true;
-                        break;
-                    }
-                }
-                System.out.println("All ready");
+                receivePlayerInfo();
+                System.out.println("All players ready");
 
-                deadPlayers = new boolean[numberOfPlayers];
-                xCoordinates = new double[numberOfPlayers];
-                yCoordinates = new double[numberOfPlayers];
+                scores = new byte[numberOfPlayers];
 
-                circles = new Circle[numberOfPlayers];
-                polylines = new Polyline[numberOfPlayers];
-
-                for (int i = 0; i < numberOfPlayers; i++) {
-                    circles[i] = new Circle(radius, Color.YELLOW);
-                    Polyline polyline = new Polyline();
-                    polyline.setStroke(colors[i]);
-//                    polyline.setStroke(new Color(Math.random(), Math.random(), Math.random(), 1));
-//                    polyline.setStroke(new Color(0.2 * (i + 1) % 1, 0.3 * (i + 1) % 1, 0.4 * (i + 1) % 1, 1));
-                    polyline.setStrokeWidth(5);
-                    polylines[i] = polyline;
-                }
-
-                System.out.println("Activate controls");
                 activateControls();
+                System.out.println("Controls activated");
 
-                System.out.println("Start getting coordinates");
-                while (true) {
-                    for (int i = 0; i < numberOfPlayers; i++) {
-                        if (!deadPlayers[i]) {
-                            deadPlayers[i] = dataInputStreamGame.readBoolean();
-                            xCoordinates[i] = dataInputStreamGame.readDouble();
-                            yCoordinates[i] = dataInputStreamGame.readDouble();
+                while (roundsPlayed < ROUNDSTOTAL) {
+                    System.out.println("Start round " + roundsPlayed);
+                    initializeDataFields();
+                    receiveGameInfo();
 
-                            if (deadPlayers[i]) {
-                                drawSidebar();
-                                System.out.println("Player " + i + " dead");
-                            }
-                        }
-                    }
-
-                    draw();
-
-                    byte numberOfPlayersAlive = numberOfPlayersAlive();
-                    if (numberOfPlayers > 1 && (numberOfPlayersAlive == 1 || numberOfPlayersAlive == 0)) {
-                        Label labelGameEnd = new Label(numberOfPlayersAlive == 0 ? "Draw" : "Player " + getWinner() + " wins!");
-                        labelGameEnd.setLayoutX(400);
-                        labelGameEnd.setLayoutY(500);
-                        labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
-                        Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
-                        break;
-                    } else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) {
-                        Label labelGameEnd = new Label("Game over");
-                        labelGameEnd.setLayoutX(400);
-                        labelGameEnd.setLayoutY(500);
-                        labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
-                        Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
-                        break;
+                    try {
+                        Thread.sleep(2000); // Sleep for a few seconds to make sure the initializeDataFields method doesn't run while the last call to the draw method is running
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
             } catch (Exception ex) {
@@ -249,9 +203,115 @@ public class GameClient extends Application {
             System.out.println("Game over");
         }
 
+        private void initializeStreams() throws IOException {
+            dataOutputStreamGame = new DataOutputStream(socketGame.getOutputStream());
+            dataInputStreamGame = new DataInputStream(socketGame.getInputStream());
+        }
+
+        private void receiveId() throws IOException {
+            byte id = dataInputStreamGame.readByte();
+            playerId = id;
+        }
+
+        /**
+         * This method receives information when players are ready and about the number of players
+         */
+        private void receivePlayerInfo() throws IOException {
+            while (true) {
+                byte command = dataInputStreamGame.readByte();
+                if (command == 0) { // 0 = receive number of players
+                    numberOfPlayers = dataInputStreamGame.readByte();
+                    readyPlayers = new boolean[numberOfPlayers]; // TODO: Copy the content of the old array (if you want players to be able to ready up before all players have joined)
+                    drawSidebar();
+                    System.out.println("Number of players " + numberOfPlayers);
+                } else if (command == 1) { // 1 = player ready
+                    byte readyPlayerId = dataInputStreamGame.readByte();
+                    readyPlayers[readyPlayerId] = true;
+                    drawSidebar();
+                    System.out.println("Player " + readyPlayerId + " ready");
+                } else if (command == 2) { // 2 = all players ready
+                    break;
+                }
+            }
+        }
+
+        /**
+         * This method initializes instance variables. The number of players must be known before calling this method
+         */
+        private void initializeDataFields() {
+            deadPlayers = new boolean[numberOfPlayers];
+            xCoordinates = new double[numberOfPlayers];
+            yCoordinates = new double[numberOfPlayers];
+
+            circles = new Circle[numberOfPlayers];
+            polylines = new Polyline[numberOfPlayers];
+
+            for (int i = 0; i < numberOfPlayers; i++) {
+                circles[i] = new Circle(RADIUS, Color.YELLOW);
+                Polyline polyline = new Polyline();
+                polyline.setStroke(colors[i]);
+//                polyline.setStroke(new Color(Math.random(), Math.random(), Math.random(), 1));
+//                polyline.setStroke(new Color(0.2 * (i + 1) % 1, 0.3 * (i + 1) % 1, 0.4 * (i + 1) % 1, 1));
+                polyline.setStrokeWidth(5);
+                polylines[i] = polyline;
+            }
+
+            keydownLeft = false;
+            keydownRight = false;
+        }
+
+        private void receiveGameInfo() throws IOException {
+            while (true) {
+                for (int i = 0; i < numberOfPlayers; i++) {
+                    if (!deadPlayers[i]) { // Data is only received for non-dead players
+                        deadPlayers[i] = dataInputStreamGame.readBoolean(); // Update dead/alive status of player i
+                        xCoordinates[i] = dataInputStreamGame.readDouble(); // Update x coordinate of player i
+                        yCoordinates[i] = dataInputStreamGame.readDouble(); // Update y coordinate of player i
+
+                        if (deadPlayers[i]) { // If player i is dead, update the side bar
+                            drawSidebar();
+                            System.out.println("Player " + i + " dead");
+                        }
+                    }
+                }
+
+                // Draw the graphics
+                draw();
+
+                // Check if the game is over
+                if (isGameOver())
+                    break;
+            }
+
+            System.out.println("Round " + roundsPlayed++ + " over");
+        }
+
+        private boolean isGameOver() {
+            byte numberOfPlayersAlive = getNumberOfPlayersAlive();
+            if (numberOfPlayers > 1 && (numberOfPlayersAlive == 0 || numberOfPlayersAlive == 1)) { // If there are multiple players, end the game when 0 (it's draw) or 1 (someone won) remains alive
+                byte winner = getWinner();
+                ++scores[winner]; // Increment the score of the winning player
+                Label labelGameEnd = new Label(numberOfPlayersAlive == 0 ? "Draw" : (roundsPlayed + 1 == ROUNDSTOTAL ? "Player " + getTotalWinner() + " wins the game!" : "Player " + winner + " wins!"));
+                labelGameEnd.setLayoutX(400);
+                labelGameEnd.setLayoutY(500);
+                labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
+                Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
+                return true;
+            } else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) { // If there is only 1 player, only end the game when he dies
+                Label labelGameEnd = new Label(roundsPlayed == ROUNDSTOTAL ? "Game over" : "Round over");
+                labelGameEnd.setLayoutX(400);
+                labelGameEnd.setLayoutY(500);
+                labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
+                Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
+                return true;
+            }
+
+            return false;
+        }
+
         // Bug: If you press and hold e.g. left and then press and release right once, it thinks right is being held down (and it keeps going right)
         // If you add "keydownRight = false;" after "keydownLeft = true;" and "keydownLeft = false;" after "keydownRight = true;" and do the same, it thinks no button is held down (and it now goes straight)
-        public void activateControls() {
+        private void activateControls() {
             pane.setOnKeyPressed(event -> {
                 try {
                     if (!deadPlayers[playerId])
@@ -268,6 +328,7 @@ public class GameClient extends Application {
                         }
                 } catch (Exception e) {
                     e.printStackTrace();
+                    circleConnected.setFill(Color.RED);
                 }
                 event.consume(); // Consume the event to make sure focus is not lost on the pane
             });
@@ -284,13 +345,14 @@ public class GameClient extends Application {
                         dataOutputStreamGame.flush();
                     } catch (Exception e) {
                         e.printStackTrace();
+                        circleConnected.setFill(Color.RED);
                     }
             });
 
             pane.setOnMouseClicked(event -> pane.requestFocus()); // Clicking on the pane makes the pane gain focus, which is required for the controls to work
         }
 
-        public void draw() {
+        private void draw() {
             for (int i = 0; i < numberOfPlayers; i++) {
                 polylines[i].getPoints().add(xCoordinates[i]);
                 polylines[i].getPoints().add(yCoordinates[i]);
@@ -307,11 +369,12 @@ public class GameClient extends Application {
             });
         }
 
-        public Pane getPane() {
+        private Pane getPane() {
             return pane;
         }
 
-        public byte numberOfPlayersAlive() {
+        // I guess this method can be replaced by a simple variable
+        private byte getNumberOfPlayersAlive() {
             byte counter = 0;
             for (int i = 0; i < deadPlayers.length; i++) {
                 if (!deadPlayers[i])
@@ -320,12 +383,25 @@ public class GameClient extends Application {
             return counter;
         }
 
-        public byte getWinner() {
+        private byte getWinner() {
             for (byte i = 0; i < deadPlayers.length; i++) {
                 if (!deadPlayers[i])
                     return i;
             }
             return -1;
+        }
+
+        // Bug: Doesn't detect draws
+        private byte getTotalWinner() {
+            byte winner = 0;
+            byte score = 0;
+            for (byte i = 0; i < numberOfPlayers; i++) {
+                if (scores[i] > score) {
+                    winner = i;
+                    score = scores[i];
+                }
+            }
+            return winner;
         }
     }
 }
