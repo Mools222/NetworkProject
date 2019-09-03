@@ -2,10 +2,7 @@ import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
-import javafx.scene.control.Button;
-import javafx.scene.control.Label;
-import javafx.scene.control.TextArea;
-import javafx.scene.control.TextField;
+import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -20,12 +17,15 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.ArrayList;
 
 public class GameClient extends Application {
-    private String hostGame = "localhost";
-    private int portGame = 8000;
+    private String host = "192.168.86.27";
+    private int portGame = 8000, portChat = 9000;
     private DataOutputStream dataOutputStreamGame;
     private DataInputStream dataInputStreamGame;
+    private DataOutputStream dataOutputStreamChat;
+    private DataInputStream dataInputStreamChat;
     private GridPane gridPanePlayers = new GridPane();
     private TextArea textAreaChat = new TextArea();
     private TextField textFieldChat = new TextField();
@@ -81,13 +81,19 @@ public class GameClient extends Application {
         buttonConnect.requestFocus();
 
         buttonConnect.setOnAction(event -> {
-            hostGame = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : "localhost";
+            host = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : host;
             portGame = textFieldPort.getText().length() > 0 ? Integer.parseInt(textFieldPort.getText()) : 8000;
 
             try {
-                Socket socketGame = new Socket(hostGame, portGame); // Create a socket to connect to the server
+                Socket socketGame = new Socket(host, portGame); // Create a socket to connect to the server
+                System.out.println("Connected to game server");
                 gameView.setSocketGame(socketGame);
                 new Thread(gameView).start();
+
+                Socket socketChat = new Socket(host, portChat);
+                System.out.println("Connected to chat server");
+                new Thread(new ChatView(socketChat)).start();
+
                 buttonReady.requestFocus();
             } catch (IOException e) {
                 e.printStackTrace();
@@ -103,6 +109,48 @@ public class GameClient extends Application {
 
             pane.requestFocus();
         });
+
+        textFieldChat.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.ENTER) {
+                String chatMessage = "Player " + gameView.getPlayerId() + ": " + textFieldChat.getText();
+                try {
+                    dataOutputStreamChat.writeUTF(chatMessage);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                textFieldChat.clear();
+            }
+        });
+    }
+
+    class ChatView implements Runnable {
+        private Socket socketChat;
+
+        public ChatView(Socket socketChat) {
+            this.socketChat = socketChat;
+            initializeStreams();
+        }
+
+        private void initializeStreams() {
+            try {
+                dataOutputStreamChat = new DataOutputStream(socketChat.getOutputStream());
+                dataInputStreamChat = new DataInputStream(socketChat.getInputStream());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    String text = dataInputStreamChat.readUTF(); // Receive chat messages
+                    Platform.runLater(() -> textAreaChat.appendText(text + "\n")); // Display chat messages
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
     }
 
     class GameView implements Runnable, GameConstants {
@@ -160,6 +208,10 @@ public class GameClient extends Application {
             });
         }
 
+        public byte getPlayerId() {
+            return playerId;
+        }
+
         private void setSocketGame(Socket socketGame) {
             this.socketGame = socketGame;
         }
@@ -209,8 +261,7 @@ public class GameClient extends Application {
         }
 
         private void receiveId() throws IOException {
-            byte id = dataInputStreamGame.readByte();
-            playerId = id;
+            playerId = dataInputStreamGame.readByte();
         }
 
         /**
@@ -291,14 +342,14 @@ public class GameClient extends Application {
             if (numberOfPlayers > 1 && (numberOfPlayersAlive == 0 || numberOfPlayersAlive == 1)) { // If there are multiple players, end the game when 0 (it's draw) or 1 (someone won) remains alive
                 byte winner = getWinner();
                 ++scores[winner]; // Increment the score of the winning player
-                Label labelGameEnd = new Label(numberOfPlayersAlive == 0 ? "Draw" : (roundsPlayed + 1 == ROUNDSTOTAL ? "Player " + getTotalWinner() + " wins the game!" : "Player " + winner + " wins!"));
-                labelGameEnd.setLayoutX(400);
+                Label labelGameEnd = new Label(numberOfPlayersAlive == 0 ? "Draw" : (roundsPlayed + 1 == ROUNDSTOTAL ? "Player(s) " + getTotalWinner().toString().replaceAll("[\\[\\]]", "") + " wins the game!" : "Player " + winner + " wins the match!"));
+                labelGameEnd.setLayoutX(350);
                 labelGameEnd.setLayoutY(500);
                 labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
                 Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
                 return true;
             } else if (numberOfPlayers == 1 && numberOfPlayersAlive == 0) { // If there is only 1 player, only end the game when he dies
-                Label labelGameEnd = new Label(roundsPlayed == ROUNDSTOTAL ? "Game over" : "Round over");
+                Label labelGameEnd = new Label(roundsPlayed + 1 == ROUNDSTOTAL ? "Game over" : "Round over");
                 labelGameEnd.setLayoutX(400);
                 labelGameEnd.setLayoutY(500);
                 labelGameEnd.setStyle("-fx-font-size: 30; -fx-font-weight: bold");
@@ -309,7 +360,7 @@ public class GameClient extends Application {
             return false;
         }
 
-        // Bug: If you press and hold e.g. left and then press and release right once, it thinks right is being held down (and it keeps going right)
+        // "Bug": If you press and hold e.g. left and then press and release right once, it thinks right is being held down (and it keeps going right)
         // If you add "keydownRight = false;" after "keydownLeft = true;" and "keydownLeft = false;" after "keydownRight = true;" and do the same, it thinks no button is held down (and it now goes straight)
         private void activateControls() {
             pane.setOnKeyPressed(event -> {
@@ -391,17 +442,19 @@ public class GameClient extends Application {
             return -1;
         }
 
-        // Bug: Doesn't detect draws
-        private byte getTotalWinner() {
-            byte winner = 0;
-            byte score = 0;
+        private ArrayList<Byte> getTotalWinner() {
+            ArrayList<Byte> winners = new ArrayList<>();
+            byte highestScore = 0;
             for (byte i = 0; i < numberOfPlayers; i++) {
-                if (scores[i] > score) {
-                    winner = i;
-                    score = scores[i];
+                if (scores[i] > highestScore) {
+                    winners.clear();
+                    winners.add(i);
+                    highestScore = scores[i];
+                } else if (scores[i] == highestScore) {
+                    winners.add(i);
                 }
             }
-            return winner;
+            return winners;
         }
     }
 }

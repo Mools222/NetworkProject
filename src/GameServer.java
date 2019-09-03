@@ -1,15 +1,15 @@
 import javafx.scene.shape.Polyline;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Date;
 
 public class GameServer {
-    private ArrayList<GameClientHandler> listOfGameClientHandlers = new ArrayList<>(); // Kinda like the observer pattern
+    private int portGame = 8000, portChat = 9000;
+    private ArrayList<GameClientHandler> listOfGameClientHandlers = new ArrayList<>();
+    private ArrayList<ChatClientHandler> listOfChatClientHandlers = new ArrayList<>();
     private byte numberOfPlayers;
     private boolean allReady;
     private byte[] directions;
@@ -24,43 +24,57 @@ public class GameServer {
         // This thread stops the program from ever finishing
         new Thread(() -> {
             try {
-                ServerSocket serverSocket = new ServerSocket(8000); // Create a server socket
+                ServerSocket serverSocketGame = new ServerSocket(portGame); // Create a server socket
                 System.out.println("Game server started at " + new Date());
 
-                while (true) {
-                    Socket socket = serverSocket.accept(); // Listen for a new connection request
-                    System.out.println("Player " + numberOfPlayers + " joined. Connection from " + socket + " at " + new Date());
+                ServerSocket serverSocketChat = new ServerSocket(portChat);
+                System.out.println("Chat server started at " + new Date());
 
-                    // Create and start a new thread for the connection
-                    GameClientHandler gameClientHandler = new GameClientHandler(socket, numberOfPlayers++);
-                    readyPlayers = new boolean[numberOfPlayers];
-                    directions = new byte[numberOfPlayers];
-                    deadPlayers = new boolean[numberOfPlayers];
-                    xCoordinates = new double[numberOfPlayers];
-                    yCoordinates = new double[numberOfPlayers];
+                while (true) {
+                    Socket socketGame = serverSocketGame.accept(); // Listen for a new connection request
+                    System.out.println("Player " + numberOfPlayers + " joined game server. Connection from " + socketGame + " at " + new Date());
+
+                    Socket socketChat = serverSocketChat.accept();
+                    System.out.println("Player " + numberOfPlayers + " joined chat server. Connection from " + socketChat + " at " + new Date());
+
+                    // Create and start a new thread for the game client
+                    GameClientHandler gameClientHandler = new GameClientHandler(socketGame, numberOfPlayers++); // Postfix increment numberOfPlayers
+                    initializeArrays(); // Since we can't know how many players will join the game, this must be done every time a player joins
 
                     listOfGameClientHandlers.add(gameClientHandler);
                     new Thread(gameClientHandler).start();
+
+                    ChatClientHandler chatClientHandler = new ChatClientHandler(socketChat);
+                    listOfChatClientHandlers.add(chatClientHandler);
+                    new Thread(chatClientHandler).start();
                 }
-            } catch (IOException ex) {
-                System.err.println(ex);
+            } catch (IOException e) {
+                e.printStackTrace();
             }
         }).start();
 
         while (true) {
-            if (allReady) {
-                new GameEngine();
+            if (allReady) { // Check whether the players are ready
+                new GameEngine(); // Create a new GameEngine object
                 break;
             }
 
             try {
-                Thread.sleep(3000);
+                Thread.sleep(3000); // Sleep the loop. No need to check constantly
             } catch (Exception e) {
                 e.printStackTrace();
             }
         }
 
         System.out.println("End main");
+    }
+
+    private void initializeArrays() {
+        readyPlayers = new boolean[numberOfPlayers];
+        directions = new byte[numberOfPlayers];
+        deadPlayers = new boolean[numberOfPlayers];
+        xCoordinates = new double[numberOfPlayers];
+        yCoordinates = new double[numberOfPlayers];
     }
 
     class GameEngine implements GameConstants {
@@ -184,14 +198,14 @@ public class GameServer {
     }
 
     class GameClientHandler implements Runnable {
-        private Socket socket; // A connected socket
+        private Socket socketGame; // A connected socket
         private DataOutputStream dataOutputStream;
         private DataInputStream dataInputStream;
         private byte playerId;
         private boolean[] notifiedDeadPlayer;
 
-        public GameClientHandler(Socket socket, byte playerId) {
-            this.socket = socket;
+        public GameClientHandler(Socket socketGame, byte playerId) {
+            this.socketGame = socketGame;
             this.playerId = playerId;
         }
 
@@ -206,8 +220,8 @@ public class GameServer {
         }
 
         private void initializeStreams() throws IOException {
-            dataOutputStream = new DataOutputStream(socket.getOutputStream());
-            dataInputStream = new DataInputStream(socket.getInputStream());
+            dataOutputStream = new DataOutputStream(socketGame.getOutputStream());
+            dataInputStream = new DataInputStream(socketGame.getInputStream());
         }
 
         private void sendPlayerInfo() throws IOException {
@@ -309,6 +323,49 @@ public class GameServer {
                             notifiedDeadPlayer[i] = true; // If the player is dead, he has been notified of this and we can stop sending
                     }
                 }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    class ChatClientHandler implements Runnable {
+        private Socket socket; // A connected socket
+        private DataOutputStream dataOutputStream;
+        private DataInputStream dataInputStream;
+
+        public ChatClientHandler(Socket socket) {
+            this.socket = socket;
+            initializeStreams();
+        }
+
+        private void initializeStreams() {
+            try {
+                dataOutputStream = new DataOutputStream(socket.getOutputStream());
+                dataInputStream = new DataInputStream(socket.getInputStream());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void run() {
+            while (true) {
+                try {
+                    // Get a chat message
+                    String chatMessage = dataInputStream.readUTF();
+
+                    // Send chat message to all clients
+                    for (ChatClientHandler chatClientHandler : listOfChatClientHandlers)
+                        chatClientHandler.receiveChatMessage(chatMessage);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        public void receiveChatMessage(String text) {
+            try {
+                dataOutputStream.writeUTF(text);
             } catch (Exception e) {
                 e.printStackTrace();
             }
