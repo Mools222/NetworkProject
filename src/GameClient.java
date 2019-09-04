@@ -20,7 +20,7 @@ import java.net.Socket;
 import java.util.ArrayList;
 
 public class GameClient extends Application {
-    private String host = "192.168.86.27";
+    private String defaultHost = "localhost";
     private int portGame = 8000, portChat = 9000;
     private DataOutputStream dataOutputStreamGame;
     private DataInputStream dataInputStreamGame;
@@ -81,16 +81,16 @@ public class GameClient extends Application {
         buttonConnect.requestFocus();
 
         buttonConnect.setOnAction(event -> {
-            host = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : host;
+            defaultHost = textFieldHost.getText().length() > 0 ? textFieldHost.getText() : defaultHost;
             portGame = textFieldPort.getText().length() > 0 ? Integer.parseInt(textFieldPort.getText()) : 8000;
 
             try {
-                Socket socketGame = new Socket(host, portGame); // Create a socket to connect to the server
+                Socket socketGame = new Socket(defaultHost, portGame); // Create a socket to connect to the server
                 System.out.println("Connected to game server");
                 gameView.setSocketGame(socketGame);
                 new Thread(gameView).start();
 
-                Socket socketChat = new Socket(host, portChat);
+                Socket socketChat = new Socket(defaultHost, portChat);
                 System.out.println("Connected to chat server");
                 new Thread(new ChatView(socketChat)).start();
 
@@ -167,11 +167,14 @@ public class GameClient extends Application {
         private Color[] colors = {Color.RED, Color.BLUE, Color.GREEN, Color.ORANGE, Color.PURPLE, Color.PINK, Color.TEAL};
 
         public GameView() {
+            setupView();
+            drawSidebar();
+        }
+
+        private void setupView() {
             pane.setPrefSize(WIDTH, HEIGHT);
-//            pane.setStyle("-fx-background-color: grey; -fx-border-color: black; -fx-border-width: 3");
             pane.setStyle("-fx-border-color: black; -fx-border-width: 3");
 
-//            labelId.setStyle("-fx-border-color: black");
             labelId.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
             labelId.setPrefWidth(100);
             labelReady.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
@@ -180,8 +183,6 @@ public class GameClient extends Application {
             labelAlive.setPrefWidth(100);
             labelScore.setStyle("-fx-font-size: 20; -fx-font-weight: bold");
             labelScore.setPrefWidth(100);
-
-            drawSidebar();
         }
 
         private void drawSidebar() {
@@ -327,7 +328,7 @@ public class GameClient extends Application {
                 }
 
                 // Draw the graphics
-                draw();
+                drawGame();
 
                 // Check if the game is over
                 if (isGameOver())
@@ -356,23 +357,22 @@ public class GameClient extends Application {
                 Platform.runLater(() -> pane.getChildren().add(labelGameEnd));
                 return true;
             }
-
             return false;
         }
 
         // "Bug": If you press and hold e.g. left and then press and release right once, it thinks right is being held down (and it keeps going right)
-        // If you add "keydownRight = false;" after "keydownLeft = true;" and "keydownLeft = false;" after "keydownRight = true;" and do the same, it thinks no button is held down (and it now goes straight)
+        // "Solution": If you add "keydownRight = false;" after "keydownLeft = true;" and "keydownLeft = false;" after "keydownRight = true;" and do the same, it thinks no button is held down (and it now goes straight)
         private void activateControls() {
             pane.setOnKeyPressed(event -> {
                 try {
-                    if (!deadPlayers[playerId])
-                        if (event.getCode() == KeyCode.LEFT) {
-                            dataOutputStreamGame.writeByte(-1);
+                    if (!deadPlayers[playerId]) // Only take inputs as long as the player is alive
+                        if (event.getCode() == KeyCode.LEFT) { // If the player presses the left arrow key
+                            dataOutputStreamGame.writeByte(-1); // Signal the game engine that the player wishes to change the angle he is traveling negatively
                             dataOutputStreamGame.flush();
                             keydownLeft = true;
                             keydownRight = false;
-                        } else if (event.getCode() == KeyCode.RIGHT) {
-                            dataOutputStreamGame.writeByte(1);
+                        } else if (event.getCode() == KeyCode.RIGHT) { // If the player presses the right arrow key
+                            dataOutputStreamGame.writeByte(1); // Signal the game engine that the player wishes to change the angle he is traveling positively
                             dataOutputStreamGame.flush();
                             keydownRight = true;
                             keydownLeft = false;
@@ -392,7 +392,7 @@ public class GameClient extends Application {
 
                 if (!keydownLeft && !keydownRight && !deadPlayers[playerId]) // This if statement prevent the controls from becoming unresponsive when direction is changed in quick succession
                     try {
-                        dataOutputStreamGame.writeByte(0);
+                        dataOutputStreamGame.writeByte(0); // Signal the game engine that the player wishes to maintain the angle he is moving
                         dataOutputStreamGame.flush();
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -403,7 +403,7 @@ public class GameClient extends Application {
             pane.setOnMouseClicked(event -> pane.requestFocus()); // Clicking on the pane makes the pane gain focus, which is required for the controls to work
         }
 
-        private void draw() {
+        private void drawGame() {
             for (int i = 0; i < numberOfPlayers; i++) {
                 polylines[i].getPoints().add(xCoordinates[i]);
                 polylines[i].getPoints().add(yCoordinates[i]);
