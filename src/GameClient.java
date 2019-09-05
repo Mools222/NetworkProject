@@ -95,6 +95,7 @@ public class GameClient extends Application {
                 new Thread(new ChatView(socketChat)).start();
 
                 buttonReady.requestFocus();
+                buttonConnect.setDisable(true); // Disable the connect button when successfully connected
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -108,6 +109,7 @@ public class GameClient extends Application {
             }
 
             pane.requestFocus();
+            buttonReady.setDisable(true); // Disable the ready button when successfully ready
         });
 
         textFieldChat.setOnKeyPressed(event -> {
